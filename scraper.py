@@ -642,6 +642,21 @@ async def run_cli(args) -> int:
 
         sources_fetched = 0
         if args.sources_newest > 0:
+
+            def _server_priority(series: dict[str, Any]) -> tuple:
+                """Prioritas pengisian server:
+                0 = drama pendek (<40 episode) — China/Korea/Japan/dll, paling sering ditonton
+                1 = movie (1 video)
+                2 = series panjang (40+ episode) — paling akhir
+                """
+                eps_count = len(series.get("episodes") or [])
+                stype = (series.get("type") or "").lower()
+                if stype == "movie" or eps_count <= 1:
+                    return (1,)
+                if eps_count < 40:
+                    return (0,)
+                return (2,)
+
             pending: list[tuple[dict[str, Any], dict[str, Any]]] = []
             for series in db.values():
                 for ep in sorted(
@@ -650,6 +665,8 @@ async def run_cli(args) -> int:
                 ):
                     if not ep.get("embeds") and not ep.get("stale"):
                         pending.append((series, ep))
+            # urutkan: drama pendek -> movie -> series panjang; terbaru dulu di tiap grup
+            pending.sort(key=lambda p: _server_priority(p[0]))
             pending = pending[: args.sources_newest]
             log.info("Mengambil embed untuk %d episode", len(pending))
 
