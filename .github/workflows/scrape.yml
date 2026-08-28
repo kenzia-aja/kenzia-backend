@@ -39,7 +39,7 @@ jobs:
           python scraper.py \
             --catalog-pages "${{ github.event.inputs.catalog_pages || '5' }}" \
             --latest-pages 1 \
-            --sources-newest "${{ github.event.inputs.sources_newest || '10' }}" \
+            --sources-newest "${{ github.event.inputs.sources_newest || '500' }}" \
             --output data/db.json
 
       - name: Migrasi db.json (perbaiki nomor, dedup, urutkan)
