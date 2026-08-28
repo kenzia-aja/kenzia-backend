@@ -1,57 +1,53 @@
-name: Scrape catalog
+name: Quick check (1 jam)
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "0 * * * *" # tiap jam pas
   workflow_dispatch:
     inputs:
       catalog_pages:
         description: "Jumlah halaman katalog"
-        default: "5"
-      sources_newest:
-        description: "Ambil embed untuk N episode terbaru"
-        default: "10"
-
-permissions:
-  contents: write
+        default: "1"
+      latest_pages:
+        description: "Halaman homepage"
+        default: "2"
 
 concurrency:
   group: scrape-sync
   cancel-in-progress: false
 
 jobs:
-  scrape-sync:
+  quick:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Install dependensi
+        run: pip install httpx beautifulsoup4
 
-      - name: Scrape catalog
+      - name: Quick scrape (homepage + halaman 1)
         run: |
           python scraper.py \
-            --catalog-pages "${{ github.event.inputs.catalog_pages || '5' }}" \
-            --latest-pages 1 \
-            --sources-newest "${{ github.event.inputs.sources_newest || '10' }}" \
+            --catalog-pages "${{ github.event.inputs.catalog_pages || '1' }}" \
+            --latest-pages "${{ github.event.inputs.latest_pages || '2' }}" \
+            --sources-newest 5 \
             --output data/db.json
 
-      - name: Migrasi db.json (perbaiki nomor, dedup, urutkan)
+      - name: Migrasi
         run: python migrate_db.py data/db.json
 
       - name: Sync ke Supabase
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python sync_supabase.py --db data/db.json
 
-      - name: Commit cache terbaru
+      - name: Commit cache
         run: |
           git config user.name "scrape-bot"
           git config user.email "actions@users.noreply.github.com"
@@ -59,6 +55,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "Tidak ada perubahan"
           else
-            git commit -m "chore: update katalog scrape [skip ci]"
+            git commit -m "chore: quick scrape [skip ci]"
             git push
           fi
