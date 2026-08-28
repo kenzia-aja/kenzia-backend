@@ -1,0 +1,267 @@
+PRD Website Streaming Film
+1. Teknik dan Tools Scraping yang Cocok
+1.1 Python dengan BeautifulSoup + Requests
+Cocok untuk scraping HTML statis
+Mudah dipelajari dan implementasi
+Contoh implementasi dasar:
+python
+import requests
+from bs4 import BeautifulSoup
+
+url = "http://45.11.57.188/"
+headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+
+response = requests.get(url, headers=headers)
+soup = BeautifulSoup(response.content, 'html.parser')
+
+# Extract movie data
+movies = soup.find_all('div', class_='movie-item')
+for movie in movies:
+    title = movie.find('h3').text
+    link = movie.find('a')['href']
+    # Simpan ke database
+1.2 Scrapy Framework
+Lebih powerful untuk proyek besar
+Built-in rate limiting dan middleware
+Cocok untuk multiple pages
+Contoh spider:
+python
+import scrapy
+
+class MovieSpider(scrapy.Spider):
+    name = 'movies'
+    start_urls = ['http://45.11.57.188/']
+    
+    def parse(self, response):
+        for movie in response.css('div.movie-item'):
+            yield {
+                'title': movie.css('h3::text').get(),
+                'link': movie.css('a::attr(href)').get(),
+                'rating': movie.css('.rating::text').get()
+            }
+1.3 Playwright atau Selenium
+Jika website menggunakan JavaScript dinamis
+Dapat menunggu content load
+Contoh dengan Playwright:
+python
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    browser = p.chromium.launch()
+    page = browser.new_page()
+    page.goto("http://45.11.57.188/")
+    page.wait_for_selector('.movie-item')
+    # Extract data
+    browser.close()
+2. PRD Website Streaming Film
+2.1 Desain UI/UX
+Homepage: Grid layout film dengan thumbnail, judul, rating, dan tahun
+Detail Film: Sinopsis, trailer, cast, genre, dan tombol play
+Kategori: Filter berdasarkan genre, tahun, negara
+Search: Bar pencarian dengan autocomplete
+Responsive: Mobile-first approach dengan breakpoints untuk tablet dan desktop
+Dark Mode: Toggle untuk mode gelap/terang
+2.2 Teknologi Modern
+Frontend: Next.js 14 dengan App Router
+Styling: Tailwind CSS dengan shadcn/ui components
+State Management: Zustand untuk state global
+Database: Supabase (PostgreSQL) untuk metadata film
+Video Streaming: HLS.js untuk adaptive streaming
+CDN: Cloudflare untuk caching dan delivery
+2.3 Lazy Loading Implementation
+Image Loading: Intersection Observer API dengan blur-up effect
+Component Loading: Dynamic imports untuk komponen yang tidak kritis
+Pagination: Infinite scroll dengan React Query untuk caching
+Code Splitting: Otomatis dengan Next.js
+2.4 Efisiensi
+Caching Strategy: SWR untuk data fetching dengan revalidation on focus
+Image Optimization: Next.js Image component dengan WebP support
+Bundle Analysis: Webpack Bundle Analyzer untuk mengidentifikasi large chunks
+Performance Monitoring: Web Vitals tracking dengan Sentry
+2.5 Struktur Database
+sql
+CREATE TABLE movies (
+  id SERIAL PRIMARY KEY,
+  title VARCHAR(255) NOT NULL,
+  slug VARCHAR(255) UNIQUE,
+  synopsis TEXT,
+  release_year INTEGER,
+  rating DECIMAL(3,1),
+  poster_url VARCHAR(255),
+  trailer_url VARCHAR(255),
+  duration INTEGER, -- in minutes
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE genres (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100) UNIQUE
+);
+
+CREATE TABLE movie_genres (
+  movie_id INTEGER REFERENCES movies(id),
+  genre_id INTEGER REFERENCES genres(id),
+  PRIMARY KEY (movie_id, genre_id)
+);
+2.6 API Structure
+GET /api/movies - List dengan pagination, filter, dan sort
+GET /api/movies/[slug] - Detail film
+GET /api/genres - Semua genre
+POST /api/movies/search - Pencarian film
+2.7 Deployment
+Hosting: Vercel untuk frontend
+Database: Supabase
+Video Storage: AWS S3 dengan CloudFront CDN
+Analytics: Vercel Analytics
+3. Implementasi Scraping
+3.1 Setup Environment
+bash
+pip install requests beautifulsoup4 scrapy playwright
+playwright install
+3.2 Scraper Script
+python
+# movie_scraper.py
+import requests
+from bs4 import BeautifulSoup
+import json
+import time
+
+class MovieScraper:
+    def __init__(self, base_url):
+        self.base_url = base_url
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+    
+    def get_movie_list(self):
+        response = requests.get(self.base_url, headers=self.headers)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        movies = []
+        
+        movie_items = soup.find_all('div', class_='movie-item')
+        for item in movie_items:
+            title = item.find('h3').text.strip() if item.find('h3') else None
+            link = item.find('a')['href'] if item.find('a') else None
+            rating = item.find('.rating').text.strip() if item.find('.rating') else None
+            year = item.find('.year').text.strip() if item.find('.year') else None
+            
+            if title and link:
+                movies.append({
+                    'title': title,
+                    'link': link,
+                    'rating': rating,
+                    'year': year
+                })
+        
+        return movies
+    
+    def get_movie_details(self, movie_url):
+        response = requests.get(movie_url, headers=self.headers)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Extract details based on the actual structure
+        synopsis = soup.find('.synopsis').text.strip() if soup.find('.synopsis') else None
+        director = soup.find('.director').text.strip() if soup.find('.director') else None
+        cast = [item.text.strip() for item in soup.find_all('.cast-item')]
+        
+        return {
+            'synopsis': synopsis,
+            'director': director,
+            'cast': cast
+        }
+    
+    def scrape_all(self):
+        movies = self.get_movie_list()
+        for movie in movies:
+            details = self.get_movie_details(movie['link'])
+            movie.update(details)
+            time.sleep(1)  # Rate limiting
+        
+        return movies
+
+# Usage
+if __name__ == "__main__":
+    scraper = MovieScraper("http://45.11.57.188/")
+    all_movies = scraper.scrape_all()
+    
+    with open('movies.json', 'w') as f:
+        json.dump(all_movies, f)
+3.3 Data Processing
+python
+# process_data.py
+import json
+import sqlite3
+
+def create_database():
+    conn = sqlite3.connect('movies.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS movies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        slug TEXT UNIQUE,
+        synopsis TEXT,
+        director TEXT,
+        rating TEXT,
+        year TEXT,
+        link TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+    
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS cast (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        movie_id INTEGER,
+        name TEXT,
+        FOREIGN KEY (movie_id) REFERENCES movies (id)
+    )
+    ''')
+    
+    conn.commit()
+    return conn
+
+def import_movies(conn, movies_file):
+    with open(movies_file, 'r') as f:
+        movies = json.load(f)
+    
+    cursor = conn.cursor()
+    for movie in movies:
+        cursor.execute('''
+        INSERT OR REPLACE INTO movies 
+        (title, slug, synopsis, director, rating, year, link)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            movie.get('title'),
+            movie.get('title', '').lower().replace(' ', '-'),
+            movie.get('synopsis'),
+            movie.get('director'),
+            movie.get('rating'),
+            movie.get('year'),
+            movie.get('link')
+        ))
+        
+        movie_id = cursor.lastrowid
+        for actor in movie.get('cast', []):
+            cursor.execute('INSERT INTO cast (movie_id, name) VALUES (?, ?)', (movie_id, actor))
+    
+    conn.commit()
+
+if __name__ == "__main__":
+    conn = create_database()
+    import_movies(conn, 'movies.json')
+    conn.close()
+4. Frontend Implementation
+4.1 Komponen MovieCard
+jsx
+// components/MovieCard.jsx
+import { useState } from 'react';
+import Image from 'next/image';
+
+const MovieCard = ({ movie }) => {
+  const [imageLoaded, setImageLoaded] = useState(false);
+  
+  return (
+    <div className="movie-card">
+      <div className="relative h-64 w-full overflow-hidden
