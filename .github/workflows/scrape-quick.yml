@@ -38,7 +38,7 @@ jobs:
           python scraper.py \
             --catalog-pages "${{ github.event.inputs.catalog_pages || '1' }}" \
             --latest-pages "${{ github.event.inputs.latest_pages || '2' }}" \
-            --sources-newest 5 \
+            --sources-newest 50 \
             --output data/db.json
 
       - name: Migrasi
