@@ -642,7 +642,6 @@ async def run_cli(args) -> int:
 
         sources_fetched = 0
         if args.sources_newest > 0:
-
             # Series yang tampil di halaman utama (Trending/Baru Ditambahkan):
             # 30 terbaru berdasarkan last_scraped_at — WAJIB punya server.
             homepage_slugs = {
@@ -653,10 +652,23 @@ async def run_cli(args) -> int:
                     reverse=True,
                 )[:30]
             }
+            # Untuk series homepage (termasuk variety show ratusan episode),
+            # hanya episode TERBARU (maks 6) yang diprioritaskan agar budget
+            # tidak habis di episode lama yang jarang ditonton.
+            homepage_recent: dict[str, set[str]] = {}
+            for s in db.values():
+                if s.get("slug") in homepage_slugs:
+                    eps_desc = sorted(
+                        s.get("episodes") or [],
+                        key=lambda e: -(e.get("number") or 0),
+                    )
+                    homepage_recent[s.get("slug")] = {
+                        e.get("url") for e in eps_desc[:6]
+                    }
 
             def _server_priority(series: dict[str, Any]) -> tuple:
                 """Prioritas pengisian server:
-                0 = series yang tampil di halaman utama (harus bisa diputar)
+                0 = series yang tampil di halaman utama (episode terbarunya)
                 1 = drama pendek (<40 episode) — China/Korea/Japan/dll
                 2 = movie (1 video)
                 3 = series panjang (40+ episode) — paling akhir
@@ -673,12 +685,18 @@ async def run_cli(args) -> int:
 
             pending: list[tuple[dict[str, Any], dict[str, Any]]] = []
             for series in db.values():
+                slug = series.get("slug")
+                only_recent = homepage_recent.get(slug)
                 for ep in sorted(
                     series.get("episodes", []),
                     key=lambda e: (e.get("number") is None, -(e.get("number") or 0)),
                 ):
-                    if not ep.get("embeds") and not ep.get("stale"):
-                        pending.append((series, ep))
+                    if ep.get("embeds") or ep.get("stale"):
+                        continue
+                    # series homepage: lewati episode lama (bukan 6 terbaru)
+                    if only_recent is not None and ep.get("url") not in only_recent:
+                        continue
+                    pending.append((series, ep))
             # urutkan: homepage -> drama pendek -> movie -> series panjang
             pending.sort(key=lambda p: _server_priority(p[0]))
             pending = pending[: args.sources_newest]
