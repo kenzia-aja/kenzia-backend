@@ -1,0 +1,19 @@
+# data scrape: db.json DI-COMMIT sebagai state antar-run cron (dipulihkan saat checkout).
+# Report & backup tidak.
+data/scrape_report.json
+data/*.bak.json
+
+# log & artefak lokal
+*.log
+*.err
+lighthouse.json
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# env & lokal
+.env
+.env.local

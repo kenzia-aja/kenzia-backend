@@ -1,0 +1,60 @@
+name: Scrape catalog
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      catalog_pages:
+        description: "Jumlah halaman katalog"
+        default: "5"
+      sources_newest:
+        description: "Ambil embed untuk N episode terbaru"
+        default: "10"
+
+permissions:
+  contents: write
+
+jobs:
+  scrape-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Scrape catalog
+        run: |
+          python scraper.py \
+            --catalog-pages "${{ github.event.inputs.catalog_pages || '5' }}" \
+            --latest-pages 1 \
+            --sources-newest "${{ github.event.inputs.sources_newest || '10' }}" \
+            --output data/db.json
+
+      - name: Migrasi db.json (perbaiki nomor, dedup, urutkan)
+        run: python migrate_db.py data/db.json
+
+      - name: Sync ke Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python sync_supabase.py --db data/db.json
+
+      - name: Commit cache terbaru
+        run: |
+          git config user.name "scrape-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/db.json data/scrape_report.json
+          if git diff --cached --quiet; then
+            echo "Tidak ada perubahan"
+          else
+            git commit -m "chore: update katalog scrape [skip ci]"
+            git push
+          fi
