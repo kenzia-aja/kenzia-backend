@@ -10,7 +10,7 @@ on:
         default: "5"
       sources_newest:
         description: "Ambil embed untuk N episode terbaru"
-        default: "10"
+        default: "300"
 
 permissions:
   contents: write
