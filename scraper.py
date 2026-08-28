@@ -643,19 +643,33 @@ async def run_cli(args) -> int:
         sources_fetched = 0
         if args.sources_newest > 0:
 
+            # Series yang tampil di halaman utama (Trending/Baru Ditambahkan):
+            # 30 terbaru berdasarkan last_scraped_at — WAJIB punya server.
+            homepage_slugs = {
+                s.get("slug")
+                for s in sorted(
+                    db.values(),
+                    key=lambda s: s.get("last_scraped_at") or "",
+                    reverse=True,
+                )[:30]
+            }
+
             def _server_priority(series: dict[str, Any]) -> tuple:
                 """Prioritas pengisian server:
-                0 = drama pendek (<40 episode) — China/Korea/Japan/dll, paling sering ditonton
-                1 = movie (1 video)
-                2 = series panjang (40+ episode) — paling akhir
+                0 = series yang tampil di halaman utama (harus bisa diputar)
+                1 = drama pendek (<40 episode) — China/Korea/Japan/dll
+                2 = movie (1 video)
+                3 = series panjang (40+ episode) — paling akhir
                 """
                 eps_count = len(series.get("episodes") or [])
                 stype = (series.get("type") or "").lower()
-                if stype == "movie" or eps_count <= 1:
-                    return (1,)
-                if eps_count < 40:
+                if series.get("slug") in homepage_slugs:
                     return (0,)
-                return (2,)
+                if stype == "movie" or eps_count <= 1:
+                    return (2,)
+                if eps_count < 40:
+                    return (1,)
+                return (3,)
 
             pending: list[tuple[dict[str, Any], dict[str, Any]]] = []
             for series in db.values():
@@ -665,7 +679,7 @@ async def run_cli(args) -> int:
                 ):
                     if not ep.get("embeds") and not ep.get("stale"):
                         pending.append((series, ep))
-            # urutkan: drama pendek -> movie -> series panjang; terbaru dulu di tiap grup
+            # urutkan: homepage -> drama pendek -> movie -> series panjang
             pending.sort(key=lambda p: _server_priority(p[0]))
             pending = pending[: args.sources_newest]
             log.info("Mengambil embed untuk %d episode", len(pending))
