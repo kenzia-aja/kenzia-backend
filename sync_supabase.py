@@ -86,6 +86,38 @@ def aggregate_counts(db: dict[str, Any], key: str) -> list[dict[str, Any]]:
     return [{"name": name, "count": count} for name, count in sorted(counter.items())]
 
 
+def series_has_video(item: dict[str, Any]) -> bool:
+    """True bila series layak tayang (ada video, atau belum pernah dicek).
+
+    - Episode "tercek" = punya bukti pemeriksaan definitif: embeds terisi,
+      stale, atau ada server dengan working True/False.
+    - Server working=None (5xx/timeout saat cek) = belum diketahui → tidak
+      dihitung mati, series tetap dipertahankan untuk dicek ulang cron.
+    - Series mati = semua episode tercek tapi tidak ada satu pun yang jalan —
+      atau tidak punya episode sama sekali.
+    """
+    eps = item.get("episodes") or []
+    if not eps:
+        return False
+    checked = 0
+    working = 0
+    for ep in eps:
+        servers = ep.get("servers") or []
+        embeds = ep.get("embeds") or []
+        definitive = (
+            bool(embeds)
+            or bool(ep.get("stale"))
+            or any(s.get("working") in (True, False) for s in servers)
+        )
+        if definitive:
+            checked += 1
+        if embeds or any(s.get("working") is True for s in servers):
+            working += 1
+    if checked == 0:
+        return True  # belum dicek → jangan dibuang
+    return working > 0
+
+
 def chunked(items: list[Any], size: int):
     for start in range(0, len(items), size):
         yield items[start : start + size]
@@ -128,11 +160,35 @@ def main() -> int:
     }
 
     with httpx.Client(base_url=f"{supabase_url.rstrip('/')}/rest/v1", headers=headers, timeout=60.0) as client:
-        series_rows = [row for row in (build_series_row(it) for it in db.values()) if row]
+        # ── Filter series mati (semua episode dicek tapi tidak ada video) ──
+        alive: dict[str, dict[str, Any]] = {}
+        dead_slugs: list[str] = []
+        for slug, item in db.items():
+            if series_has_video(item):
+                alive[slug] = item
+            else:
+                dead_slugs.append(slug)
+        dropped = len(dead_slugs)
+
+        series_rows = [row for row in (build_series_row(it) for it in alive.values()) if row]
         for batch in chunked(series_rows, BATCH_SIZE):
             resp = client.post("/series?on_conflict=slug", json=batch)
             resp.raise_for_status()
-        print(f"Series di-upsert: {len(series_rows)}")
+        print(f"Series di-upsert: {len(series_rows)} (dibuang mati: {dropped})")
+
+        # Hapus series mati yang sebelumnya sudah terlanjur di Supabase
+        # (cascade menghapus episodes-nya juga)
+        resp = client.get("/series", params={"select": "slug"})
+        resp.raise_for_status()
+        existing_slugs = [row["slug"] for row in resp.json()]
+        to_delete = [s for s in existing_slugs if s in set(dead_slugs)]
+        for i in range(0, len(to_delete), BATCH_SIZE):
+            batch = to_delete[i : i + BATCH_SIZE]
+            quoted = ",".join(f'"{s}"' for s in batch)
+            resp = client.delete("/series", params={"slug": f"in.({quoted})"})
+            resp.raise_for_status()
+        if to_delete:
+            print(f"Series mati dihapus dari Supabase: {len(to_delete)}")
 
         resp = client.get("/series", params={"select": "id,slug"})
         resp.raise_for_status()
@@ -140,7 +196,7 @@ def main() -> int:
 
         episode_rows: list[dict[str, Any]] = []
         skipped = 0
-        for slug, item in db.items():
+        for slug, item in alive.items():
             sid = id_map.get(slug)
             if sid is None:
                 skipped += 1

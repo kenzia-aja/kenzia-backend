@@ -411,10 +411,19 @@ class OppadramaScraper:
 
         for server in servers:
             try:
-                resp = await self._fetch(server["embed"])
-                server["working"] = resp.status_code == 200
+                # request langsung (tanpa raise_for_status) agar status bisa dinilai
+                async with self._sem:
+                    resp = await self._client.get(server["embed"])
+                if resp.status_code == 200:
+                    server["working"] = True
+                elif resp.status_code in (404, 410):
+                    server["working"] = False  # pasti mati
+                else:
+                    # 403 (bot protection), 5xx, dsb: tidak diketahui — jangan dianggap mati
+                    server["working"] = None
             except Exception:
-                server["working"] = False
+                # timeout / koneksi gagal: tidak diketahui — akan di-retry run berikutnya
+                server["working"] = None
 
         # Tandai risiko iklan per server:
         #   - server dengan `stream` (HLS) diputar via hls.js/Plyr milik kita sendiri -> BEBAS iklan.
@@ -580,9 +589,17 @@ async def run_cli(args) -> int:
     try:
         added = 0
         catalog_slugs: list[str] = []
+        empty_pages = 0
         for p in range(1, args.catalog_pages + 1):
             items = await scraper.get_series_list(p)
             log.info("Katalog halaman %d: %d item", p, len(items))
+            if not items:
+                empty_pages += 1
+                if empty_pages >= 3:
+                    log.info("Katalog berakhir di halaman %d (3 halaman kosong berturut)", p - 3)
+                    break
+                continue
+            empty_pages = 0
             for it in items:
                 if it["slug"] not in db:
                     added += 1
@@ -708,17 +725,43 @@ async def run_cli(args) -> int:
                 try:
                     servers = await scraper.get_servers(ep["url"])
                     ep["servers"] = servers
+                    # embeds hanya server yang DEFINITIF jalan (True).
+                    # working=None (5xx/timeout) → dikeluarkan agar episode
+                    # tetap pending dan di-retry run berikutnya.
                     ep["embeds"] = [
                         s.get("stream") or s["embed"]
                         for s in servers
-                        if s.get("working") is not False
+                        if s.get("working") is True
                     ]
-                    ep["stale"] = not ep["embeds"]
+                    # stale (mati) HANYA bila semua server dicek dan semuanya
+                    # definitif gagal (False) — 5xx/timeout TIDAK membuat stale
+                    if servers:
+                        ep["stale"] = all(s.get("working") is False for s in servers)
+                    else:
+                        ep["stale"] = True  # halaman tanpa opsi server = mati
                     ep["checked_at"] = now_iso()
                     if ep["embeds"]:
                         sources_fetched += 1
                 except Exception as exc:
                     failures.append({"stage": "sources", "slug": ep.get("url"), "error": str(exc)})
+
+            # Probe dulu: test 1 episode. Kalau situs down/tidak bisa di-scrape,
+            # lewati SELURUH tahap sources run ini (jangan buang budget).
+            if pending:
+                probe_series, probe_ep = pending[0]
+                try:
+                    probe = await scraper.get_servers(probe_ep["url"])
+                    if not probe:
+                        log.warning(
+                            "Probe: 0 server dari %s — lewati tahap sources run ini",
+                            probe_ep["url"],
+                        )
+                        pending = []
+                except Exception as exc:
+                    log.warning(
+                        "Probe gagal (%s) — lewati tahap sources run ini", exc
+                    )
+                    pending = []
 
             await asyncio.gather(*(fetch_embeds(pair) for pair in pending))
 

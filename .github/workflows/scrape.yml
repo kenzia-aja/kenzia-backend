@@ -22,7 +22,7 @@ concurrency:
 jobs:
   scrape-sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
@@ -37,7 +37,7 @@ jobs:
       - name: Scrape catalog
         run: |
           python scraper.py \
-            --catalog-pages "${{ github.event.inputs.catalog_pages || '5' }}" \
+            --catalog-pages "${{ github.event.inputs.catalog_pages || '500' }}" \
             --latest-pages 1 \
             --sources-newest "${{ github.event.inputs.sources_newest || '500' }}" \
             --output data/db.json
