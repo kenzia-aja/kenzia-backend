@@ -33,6 +33,12 @@ jobs:
       - name: Install dependensi
         run: pip install httpx beautifulsoup4
 
+      - name: Pulihkan state dari Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python restore_from_supabase.py --output data/db.json
+
       - name: Quick scrape (homepage + halaman 1)
         run: |
           python scraper.py \
@@ -46,15 +52,3 @@ jobs:
 
       - name: Sync ke Supabase
         run: python sync_supabase.py --db data/db.json
-
-      - name: Commit cache
-        run: |
-          git config user.name "scrape-bot"
-          git config user.email "actions@users.noreply.github.com"
-          git add data/db.json
-          if git diff --cached --quiet; then
-            echo "Tidak ada perubahan"
-          else
-            git commit -m "chore: quick scrape [skip ci]"
-            git push
-          fi

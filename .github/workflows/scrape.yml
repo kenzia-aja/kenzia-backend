@@ -34,6 +34,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Pulihkan state dari Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python restore_from_supabase.py --output data/db.json
+
       - name: Scrape catalog
         run: |
           python scraper.py \
@@ -50,15 +56,3 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python sync_supabase.py --db data/db.json
-
-      - name: Commit cache terbaru
-        run: |
-          git config user.name "scrape-bot"
-          git config user.email "actions@users.noreply.github.com"
-          git add data/db.json
-          if git diff --cached --quiet; then
-            echo "Tidak ada perubahan"
-          else
-            git commit -m "chore: update katalog scrape [skip ci]"
-            git push
-          fi

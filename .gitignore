@@ -1,7 +1,6 @@
-# data scrape: db.json DI-COMMIT sebagai state antar-run cron (dipulihkan saat checkout).
-# Report & backup tidak.
-data/scrape_report.json
-data/*.bak.json
+# data scrape: db.json TIDAK di-commit lagi — state di-rebuild dari Supabase
+# oleh restore_from_supabase.py di awal setiap run Actions.
+data/
 
 # log & artefak lokal
 *.log

@@ -135,6 +135,12 @@ def main() -> int:
         fail(f"File {db_path} tidak ditemukan. Jalankan scraper.py dulu.")
 
     db = json.loads(db_path.read_text(encoding="utf-8"))
+    if not db:
+        fail(
+            "db.json KOSONG — kemungkinan state hilang/rusak. "
+            "JANGAN sync dengan state kosong (bisa menghapus genres/countries). "
+            "Pulihkan dulu: python restore_from_supabase.py"
+        )
     supabase_url = os.environ.get("SUPABASE_URL")
     service_key = os.environ.get("SUPABASE_SERVICE_KEY")
 
