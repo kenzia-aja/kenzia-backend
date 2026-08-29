@@ -7,10 +7,10 @@ on:
     inputs:
       catalog_pages:
         description: "Jumlah halaman katalog"
-        default: "5"
+        default: "1"
       sources_newest:
         description: "Ambil embed untuk N episode terbaru"
-        default: "1500"
+        default: "2000"
 
 permissions:
   contents: write
@@ -43,9 +43,9 @@ jobs:
       - name: Scrape catalog
         run: |
           python scraper.py \
-            --catalog-pages "${{ github.event.inputs.catalog_pages || '500' }}" \
+            --catalog-pages "${{ github.event.inputs.catalog_pages || '1' }}" \
             --latest-pages 1 \
-            --sources-newest "${{ github.event.inputs.sources_newest || '1500' }}" \
+            --sources-newest "${{ github.event.inputs.sources_newest || '2000' }}" \
             --concurrency 6 --output data/db.json
 
       - name: Migrasi db.json (perbaiki nomor, dedup, urutkan)
