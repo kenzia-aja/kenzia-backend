@@ -615,6 +615,24 @@ async def run_cli(args) -> int:
                 upsert_item(db, it)
                 catalog_slugs.append(it["slug"])
 
+        # Series homepage (16 Drama + 16 Movie terbaru) — dipakai untuk detail
+        # re-scrape di bawah dan prioritas pengisian server.
+        def _newest_slugs(ttype: str, n: int) -> set[str]:
+            rows = [
+                s
+                for s in db.values()
+                if (s.get("type") or "").strip().lower() == ttype
+            ]
+            rows.sort(
+                key=lambda s: s.get("first_seen_at")
+                or s.get("last_scraped_at")
+                or "",
+                reverse=True,
+            )
+            return {s.get("slug") for s in rows[:n]}
+
+        homepage_slugs = _newest_slugs("drama", 16) | _newest_slugs("movie", 16)
+
         details_scraped = 0
         targets = []
         seen = set()
@@ -625,6 +643,14 @@ async def run_cli(args) -> int:
             item = db[slug]
             needs = args.force_details or not item.get("synopsis") or not item.get("last_scraped_at")
             if needs:
+                targets.append(item)
+
+        # Series homepage yang belum punya episode → paksa re-scrape detail,
+        # agar baris "Update Series/Film" di homepage selalu bisa diputar.
+        for slug in homepage_slugs:
+            item = db.get(slug)
+            if item and slug not in seen and not item.get("episodes"):
+                seen.add(slug)
                 targets.append(item)
 
         async def enrich(item: dict[str, Any]) -> None:
@@ -668,24 +694,7 @@ async def run_cli(args) -> int:
 
         sources_fetched = 0
         if args.sources_newest > 0:
-            # Series yang tampil di halaman utama (baris Update Series & Update
-            # Film): 16 Drama + 16 Movie terbaru berdasarkan first_seen_at —
-            # WAJIB punya server agar baris homepage langsung bisa diputar.
-            def _newest(ttype: str, n: int) -> set[str]:
-                rows = [
-                    s
-                    for s in db.values()
-                    if (s.get("type") or "").strip().lower() == ttype
-                ]
-                rows.sort(
-                    key=lambda s: s.get("first_seen_at")
-                    or s.get("last_scraped_at")
-                    or "",
-                    reverse=True,
-                )
-                return {s.get("slug") for s in rows[:n]}
-
-            homepage_slugs = _newest("drama", 16) | _newest("movie", 16)
+            # homepage_slugs sudah dihitung di atas (16 Drama + 16 Movie terbaru).
             # Untuk series homepage (termasuk variety show ratusan episode),
             # hanya episode TERBARU (maks 6) yang diprioritaskan agar budget
             # tidak habis di episode lama yang jarang ditonton.
