@@ -1,10 +1,10 @@
-import asyncio
+﻿import asyncio
 import base64
 import json
 import logging
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urljoin, urlparse
@@ -19,7 +19,7 @@ USER_AGENT = (
 )
 CHALLENGE_MARKER = "verify_human"
 EPISODE_SLUG_RE = re.compile(r"^(?P<series>.+)-episode-\d+$")
-# Server yang diblokir (embed-nya sering error/rusak) — disingkirkan dari daftar.
+# Server yang diblokir (embed-nya sering error/rusak) â€” disingkirkan dari daftar.
 BLOCKED_HOSTS = ("minochinos.com", "filelions", "filelions.com")
 BLOCKED_NAMES = ("filelions",)
 # Tipe series yang diblokir: variety show (ratusan episode, tidak fokus) & special.
@@ -398,7 +398,7 @@ class OppadramaScraper:
         """Kembalikan daftar server video untuk satu halaman episode/movie.
 
         Setiap item: {name, embed, stream, working}.
-        stream = URL .m3u8 langsung (saat ini TIDAK ADA yang bisa di-resolve —
+        stream = URL .m3u8 langsung (saat ini TIDAK ADA yang bisa di-resolve â€”
                  m3u8 `data-hash` TurboVIP ternyata decoy anti-scrape yang
                  menunjuk file PNG, bukan segmen video. Maka semua server
                  diputar sebagai embed iframe).
@@ -422,10 +422,10 @@ class OppadramaScraper:
                 elif resp.status_code in (404, 410):
                     server["working"] = False  # pasti mati
                 else:
-                    # 403 (bot protection), 5xx, dsb: tidak diketahui — jangan dianggap mati
+                    # 403 (bot protection), 5xx, dsb: tidak diketahui â€” jangan dianggap mati
                     server["working"] = None
             except Exception:
-                # timeout / koneksi gagal: tidak diketahui — akan di-retry run berikutnya
+                # timeout / koneksi gagal: tidak diketahui â€” akan di-retry run berikutnya
                 server["working"] = None
 
         # Tandai risiko iklan per server:
@@ -615,7 +615,7 @@ async def run_cli(args) -> int:
                 upsert_item(db, it)
                 catalog_slugs.append(it["slug"])
 
-        # Series homepage (16 Drama + 16 Movie terbaru) — dipakai untuk detail
+        # Series homepage (16 Drama + 16 Movie terbaru) â€” dipakai untuk detail
         # re-scrape di bawah dan prioritas pengisian server.
         def _newest_slugs(ttype: str, n: int) -> set[str]:
             rows = [
@@ -645,7 +645,7 @@ async def run_cli(args) -> int:
             if needs:
                 targets.append(item)
 
-        # Series homepage yang belum punya episode → paksa re-scrape detail,
+        # Series homepage yang belum punya episode â†’ paksa re-scrape detail,
         # agar baris "Update Series/Film" di homepage selalu bisa diputar.
         for slug in homepage_slugs:
             item = db.get(slug)
@@ -698,6 +698,7 @@ async def run_cli(args) -> int:
             # Untuk series homepage (termasuk variety show ratusan episode),
             # hanya episode TERBARU (maks 6) yang diprioritaskan agar budget
             # tidak habis di episode lama yang jarang ditonton.
+            _fresh_cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
             homepage_recent: dict[str, set[str]] = {}
             for s in db.values():
                 if s.get("slug") in homepage_slugs:
@@ -709,22 +710,28 @@ async def run_cli(args) -> int:
                         e.get("url") for e in eps_desc[:6]
                     }
 
-            def _server_priority(series: dict[str, Any]) -> tuple:
+            def _server_priority(series: dict[str, Any], ep: dict[str, Any]) -> tuple:
                 """Prioritas pengisian server:
-                0 = series yang tampil di halaman utama (episode terbarunya)
-                1 = drama pendek (<40 episode) — China/Korea/Japan/dll
+                0 = series homepage / episode BARU (<=48 jam) â€” langsung bisa ditonton
+                1 = drama pendek (<40 episode) â€” China/Korea/Japan/dll
                 2 = movie (1 video)
-                3 = series panjang (40+ episode) — paling akhir
+                3 = series panjang (40+ episode) â€” paling akhir
                 """
                 eps_count = len(series.get("episodes") or [])
                 stype = (series.get("type") or "").lower()
                 if series.get("slug") in homepage_slugs:
                     return (0,)
                 if stype == "movie" or eps_count <= 1:
-                    return (2,)
-                if eps_count < 40:
-                    return (1,)
-                return (3,)
+                    g = 2
+                elif eps_count < 40:
+                    g = 1
+                else:
+                    g = 3
+                # Episode yang baru ditemukan (<=48 jam) naik ke prioritas tertinggi
+                fs = ep.get("first_seen_at") or ""
+                if fs and fs >= _fresh_cutoff:
+                    return (0,)
+                return (g,)
 
             pending: list[tuple[dict[str, Any], dict[str, Any]]] = []
             for series in db.values():
@@ -741,7 +748,7 @@ async def run_cli(args) -> int:
                         continue
                     pending.append((series, ep))
             # urutkan: homepage -> drama pendek -> movie -> series panjang
-            pending.sort(key=lambda p: _server_priority(p[0]))
+            pending.sort(key=lambda p: _server_priority(p[0], p[1]))
             pending = pending[: args.sources_newest]
             log.info("Mengambil embed untuk %d episode", len(pending))
 
@@ -752,7 +759,7 @@ async def run_cli(args) -> int:
                     servers = await scraper.get_servers(ep["url"])
                     ep["servers"] = servers
                     # embeds hanya server yang DEFINITIF jalan (True).
-                    # working=None (5xx/timeout) → dikeluarkan agar episode
+                    # working=None (5xx/timeout) â†’ dikeluarkan agar episode
                     # tetap pending dan di-retry run berikutnya.
                     ep["embeds"] = [
                         s.get("stream") or s["embed"]
@@ -760,7 +767,7 @@ async def run_cli(args) -> int:
                         if s.get("working") is True
                     ]
                     # stale (mati) HANYA bila semua server dicek dan semuanya
-                    # definitif gagal (False) — 5xx/timeout TIDAK membuat stale
+                    # definitif gagal (False) â€” 5xx/timeout TIDAK membuat stale
                     if servers:
                         ep["stale"] = all(s.get("working") is False for s in servers)
                     else:
@@ -803,13 +810,13 @@ async def run_cli(args) -> int:
                             if any(s.get("working") is True for s in probe):
                                 sources_fetched += 1
                             probe_ok = True
-                            log.info("Probe sukses pada %s — lanjut tahap sources", pe["url"])
+                            log.info("Probe sukses pada %s â€” lanjut tahap sources", pe["url"])
                             break
-                        log.warning("Probe: 0 server dari %s — coba kandidat lain", pe["url"])
+                        log.warning("Probe: 0 server dari %s â€” coba kandidat lain", pe["url"])
                     except Exception as exc:
                         log.warning("Probe gagal untuk %s: %s", pe["url"], exc)
                 if not probe_ok:
-                    log.warning("Semua probe gagal — lewati tahap sources run ini")
+                    log.warning("Semua probe gagal â€” lewati tahap sources run ini")
                     pending = []
 
             await asyncio.gather(*(fetch_embeds(pair) for pair in pending))
