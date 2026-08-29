@@ -42,7 +42,7 @@ jobs:
       - name: Quick scrape (homepage + halaman 1)
         run: |
           python scraper.py \
-            --catalog-pages "${{ github.event.inputs.catalog_pages || '1' }}" \
+            --catalog-pages 0 \
             --latest-pages "${{ github.event.inputs.latest_pages || '2' }}" \
             --sources-newest 200 --concurrency 6 \
             --output data/db.json
