@@ -668,16 +668,24 @@ async def run_cli(args) -> int:
 
         sources_fetched = 0
         if args.sources_newest > 0:
-            # Series yang tampil di halaman utama (Trending/Baru Ditambahkan):
-            # 30 terbaru berdasarkan last_scraped_at — WAJIB punya server.
-            homepage_slugs = {
-                s.get("slug")
-                for s in sorted(
-                    db.values(),
-                    key=lambda s: s.get("last_scraped_at") or "",
+            # Series yang tampil di halaman utama (baris Update Series & Update
+            # Film): 16 Drama + 16 Movie terbaru berdasarkan first_seen_at —
+            # WAJIB punya server agar baris homepage langsung bisa diputar.
+            def _newest(ttype: str, n: int) -> set[str]:
+                rows = [
+                    s
+                    for s in db.values()
+                    if (s.get("type") or "").strip().lower() == ttype
+                ]
+                rows.sort(
+                    key=lambda s: s.get("first_seen_at")
+                    or s.get("last_scraped_at")
+                    or "",
                     reverse=True,
-                )[:30]
-            }
+                )
+                return {s.get("slug") for s in rows[:n]}
+
+            homepage_slugs = _newest("drama", 16) | _newest("movie", 16)
             # Untuk series homepage (termasuk variety show ratusan episode),
             # hanya episode TERBARU (maks 6) yang diprioritaskan agar budget
             # tidak habis di episode lama yang jarang ditonton.
