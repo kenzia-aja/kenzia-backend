@@ -1,7 +1,7 @@
--- ─────────────────────────────────────────────────────────────
--- Kenzia — Skema Supabase (idempotent, aman dijalankan berulang)
--- Jalankan di Supabase Dashboard → SQL Editor
--- ─────────────────────────────────────────────────────────────
+﻿-- â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- Kenzia â€” Skema Supabase (idempotent, aman dijalankan berulang)
+-- Jalankan di Supabase Dashboard â†’ SQL Editor
+-- â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 -- Tabel series
 create table if not exists public.series (
@@ -65,10 +65,11 @@ alter table public.episodes add column if not exists servers jsonb default '[]':
 -- Urutan "yang baru": waktu judul/episode pertama kali ditemukan scraper
 alter table public.series add column if not exists first_seen_at timestamptz;
 alter table public.episodes add column if not exists first_seen_at timestamptz;
+alter table public.series add column if not exists last_update_at timestamptz;
 
 create index if not exists series_first_seen_idx on public.series (first_seen_at desc nulls last);
 
--- ── Row Level Security: buka baca untuk anon, tulis hanya service_role ──
+-- â”€â”€ Row Level Security: buka baca untuk anon, tulis hanya service_role â”€â”€
 alter table public.series enable row level security;
 alter table public.episodes enable row level security;
 alter table public.genres enable row level security;

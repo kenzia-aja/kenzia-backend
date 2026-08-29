@@ -48,6 +48,8 @@ def build_series_row(item: dict[str, Any]) -> Optional[dict[str, Any]]:
     # first_seen_at hanya dikirim bila ada — jangan menimpa nilai backfill SQL dengan null
     if item.get("first_seen_at"):
         row["first_seen_at"] = item["first_seen_at"]
+    if item.get("last_update_at"):
+        row["last_update_at"] = item["last_update_at"]
     return row
 
 

@@ -83,6 +83,7 @@ def main() -> int:
             "episodes": [],
             "last_scraped_at": row.get("last_scraped_at"),
             "first_seen_at": row.get("first_seen_at"),
+            "last_update_at": row.get("last_update_at"),
         }
 
     for ep in episode_rows:

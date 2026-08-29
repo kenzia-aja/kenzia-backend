@@ -617,6 +617,9 @@ async def run_cli(args) -> int:
 
         # Series homepage (16 Drama + 16 Movie terbaru) â€” dipakai untuk detail
         # re-scrape di bawah dan prioritas pengisian server.
+        # Series homepage (16 Drama + 16 Movie TERBARU DI-UPDATE) — urutan
+        # mengikuti last_update_at (merge episode terbaru) agar baris homepage
+        # persis mencerminkan update terbaru situs sumber.
         def _newest_slugs(ttype: str, n: int) -> set[str]:
             rows = [
                 s
@@ -624,7 +627,8 @@ async def run_cli(args) -> int:
                 if (s.get("type") or "").strip().lower() == ttype
             ]
             rows.sort(
-                key=lambda s: s.get("first_seen_at")
+                key=lambda s: s.get("last_update_at")
+                or s.get("first_seen_at")
                 or s.get("last_scraped_at")
                 or "",
                 reverse=True,
@@ -697,7 +701,17 @@ async def run_cli(args) -> int:
                 log.info("Latest halaman %d: %d item", p, len(latest))
                 for card in latest:
                     sslug = card.get("series_slug")
-                    num = parse_ep_number(card.get("label"))
+                    ctype = (card.get("type") or "").strip().lower()
+                    if ctype == "movie" or sslug is None:
+                        # Movie: URL episode /movie-{slug}-{kualitas}/ atau
+                        # /nonton-{slug}-{kualitas}/ → series slug-nya tanpa
+                        # prefix & suffix kualitas (contoh: levitating-2026).
+                        m = re.search(
+                            r"/(?:movie|nonton)-(.+?)(?:-(?:webdl|bluray|blu-ray|hdtc|hdts|cam|hd))*/?$",
+                            card.get("url", ""),
+                        )
+                        sslug = m.group(1) if m else sslug
+                    num = 1 if ctype == "movie" else parse_ep_number(card.get("label"))
                     series = db.get(sslug) if sslug else None
                     if series is None or num is None:
                         continue
@@ -706,8 +720,11 @@ async def run_cli(args) -> int:
                         series,
                         [{"number": num, "title": card["title"], "date": None, "url": card["url"]}],
                     )
-                    if merged and before == 0:
-                        episodes_merged += 1
+                    if merged:
+                        # Tandai kapan terakhir series ini di-update (urutan homepage)
+                        series["last_update_at"] = now_iso()
+                        if before == 0:
+                            episodes_merged += 1
             log.info("Episode baru dari latest: %d", episodes_merged)
 
         sources_fetched = 0
