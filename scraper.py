@@ -631,7 +631,25 @@ async def run_cli(args) -> int:
             )
             return {s.get("slug") for s in rows[:n]}
 
-        homepage_slugs = _newest_slugs("drama", 16) | _newest_slugs("movie", 16)
+        def _top_rated_slugs(ttype: str, n: int) -> set[str]:
+            """Untuk section Rekomendasi (rating tertinggi) di homepage."""
+            rows = [
+                s
+                for s in db.values()
+                if (s.get("type") or "").strip().lower() == ttype
+            ]
+            rows.sort(
+                key=lambda s: float(s.get("rating") or 0),
+                reverse=True,
+            )
+            return {s.get("slug") for s in rows[:n]}
+
+        homepage_slugs = (
+            _newest_slugs("drama", 16)
+            | _newest_slugs("movie", 16)
+            | _top_rated_slugs("movie", 15)
+            | _top_rated_slugs("drama", 15)
+        )
 
         details_scraped = 0
         targets = []
