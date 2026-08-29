@@ -729,25 +729,25 @@ async def run_cli(args) -> int:
                     }
 
             def _server_priority(series: dict[str, Any], ep: dict[str, Any]) -> tuple:
-                """Prioritas pengisian server:
-                0 = series homepage / episode BARU (<=48 jam) â€” langsung bisa ditonton
-                1 = drama pendek (<40 episode) â€” China/Korea/Japan/dll
-                2 = movie (1 video)
-                3 = series panjang (40+ episode) â€” paling akhir
+                """Prioritas pengisian server (grup, lalu episode-fresh dulu):
+                grup 0 = series homepage + rekomendasi (top rating) — WAJIB bisa diputar
+                grup 1 = drama pendek (<40 episode)
+                grup 2 = movie
+                grup 3 = series panjang (40+ episode)
+                Episode baru (<=48 jam) naik ke grup 0.
                 """
                 eps_count = len(series.get("episodes") or [])
                 stype = (series.get("type") or "").lower()
                 if series.get("slug") in homepage_slugs:
-                    return (0,)
-                if stype == "movie" or eps_count <= 1:
+                    g = 0
+                elif stype == "movie" or eps_count <= 1:
                     g = 2
                 elif eps_count < 40:
                     g = 1
                 else:
                     g = 3
-                # Episode yang baru ditemukan (<=48 jam) naik ke prioritas tertinggi
                 fs = ep.get("first_seen_at") or ""
-                if fs and fs >= _fresh_cutoff:
+                if fs and fs >= _fresh_cutoff and g > 0:
                     return (0,)
                 return (g,)
 
