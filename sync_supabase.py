@@ -92,18 +92,20 @@ def aggregate_counts(db: dict[str, Any], key: str) -> list[dict[str, Any]]:
 
 
 def series_has_video(item: dict[str, Any]) -> bool:
-    """True bila series layak tayang (ada video, atau belum pernah dicek).
+    """True bila series layak tayang.
 
-    - Episode "tercek" = punya bukti pemeriksaan definitif: embeds terisi,
-      stale, atau ada server dengan working True/False.
-    - Server working=None (5xx/timeout saat cek) = belum diketahui → tidak
-      dihitung mati, series tetap dipertahankan untuk dicek ulang cron.
-    - Series mati = semua episode tercek tapi tidak ada satu pun yang jalan —
-      atau tidak punya episode sama sekali.
+    - TANPA episode:
+        * detail belum pernah sukses (tanpa synopsis) → PERTAHANKAN
+          (detail scrape bisa saja gagal masa 503 — jangan buang!)
+        * detail sukses tapi tetap kosong → MATI (sumber tak punya video)
+    - DENGAN episode:
+        * definitive = ada bukti pemeriksaan (embeds / stale / working True-False)
+        * working=None (5xx/timeout) tidak dihitung mati
+        * mati = semua episode tercek tapi tidak ada yang jalan
     """
     eps = item.get("episodes") or []
     if not eps:
-        return False
+        return not bool(item.get("synopsis"))
     checked = 0
     working = 0
     for ep in eps:
@@ -204,9 +206,20 @@ def main() -> int:
         if to_delete:
             print(f"Series mati dihapus dari Supabase: {len(to_delete)}")
 
-        resp = client.get("/series", params={"select": "id,slug"})
-        resp.raise_for_status()
-        id_map = {row["slug"]: row["id"] for row in resp.json()}
+        # id_map SEMUA series — dengan pagination (default PostgREST cuma 1000)
+        id_map: dict[str, int] = {}
+        offset = 0
+        while True:
+            resp = client.get("/series", params={"select": "id,slug", "limit": 1000, "offset": offset})
+            resp.raise_for_status()
+            rows = resp.json()
+            if not rows:
+                break
+            for row in rows:
+                id_map[row["slug"]] = row["id"]
+            if len(rows) < 1000:
+                break
+            offset += 1000
 
         episode_rows: list[dict[str, Any]] = []
         skipped = 0
