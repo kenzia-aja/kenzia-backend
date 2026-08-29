@@ -22,6 +22,9 @@ EPISODE_SLUG_RE = re.compile(r"^(?P<series>.+)-episode-\d+$")
 # Server yang diblokir (embed-nya sering error/rusak) — disingkirkan dari daftar.
 BLOCKED_HOSTS = ("minochinos.com", "filelions", "filelions.com")
 BLOCKED_NAMES = ("filelions",)
+# Tipe series yang diblokir: variety show (ratusan episode, tidak fokus) & special.
+# Website hanya fokus: movie / drama (series) / anime.
+BLOCKED_SERIES_TYPES = ("tv show", "variety show", "variety", "special")
 # Server yang dijadikan default (paling depan saat dipilih user).
 PREFERRED_SERVERS = ("hydrax",)
 
@@ -518,6 +521,7 @@ def merge_episodes(series: dict[str, Any], incoming: list[dict[str, Any]]) -> bo
                 "servers": [],
                 "embeds": [],
                 "stale": False,
+                "first_seen_at": now_iso(),
             }
             eps.append(new_ep)
             by_clean_url[inc_clean] = len(eps) - 1
@@ -601,8 +605,13 @@ async def run_cli(args) -> int:
                 continue
             empty_pages = 0
             for it in items:
-                if it["slug"] not in db:
+                # Lewati variety show / special (website fokus movie-drama-anime)
+                if (it.get("type") or "").strip().lower() in BLOCKED_SERIES_TYPES:
+                    continue
+                is_new = it["slug"] not in db
+                if is_new:
                     added += 1
+                    it["first_seen_at"] = now_iso()
                 upsert_item(db, it)
                 catalog_slugs.append(it["slug"])
 

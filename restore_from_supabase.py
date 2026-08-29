@@ -1,4 +1,4 @@
-"""Pulihkan db.json dari Supabase (kebalikan sync_supabase.py).
+﻿"""Pulihkan db.json dari Supabase (kebalikan sync_supabase.py).
 
 Dipakai saat state lokal hilang/rusak: semua series + episode (termasuk
 servers yang sudah terisi cron) diunduh dari Supabase dan ditulis ke db.json.
@@ -54,10 +54,10 @@ def main() -> int:
         headers=headers,
         timeout=60.0,
     ) as client:
-        print("Mengunduh series…")
+        print("Mengunduh seriesâ€¦")
         series_rows = fetch_all(client, "series")
         print(f"  {len(series_rows)} series")
-        print("Mengunduh episodes…")
+        print("Mengunduh episodesâ€¦")
         episode_rows = fetch_all(client, "episodes")
         print(f"  {len(episode_rows)} episodes")
 
@@ -82,6 +82,7 @@ def main() -> int:
             "genres": row.get("genres") or [],
             "episodes": [],
             "last_scraped_at": row.get("last_scraped_at"),
+            "first_seen_at": row.get("first_seen_at"),
         }
 
     for ep in episode_rows:
@@ -97,6 +98,7 @@ def main() -> int:
                 "servers": ep.get("servers") or [],
                 "embeds": ep.get("embeds") or [],
                 "stale": bool(ep.get("stale")),
+                "first_seen_at": ep.get("first_seen_at"),
             }
         )
 

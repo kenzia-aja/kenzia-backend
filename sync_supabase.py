@@ -27,7 +27,7 @@ def build_series_row(item: dict[str, Any]) -> Optional[dict[str, Any]]:
     slug = item.get("slug")
     if not slug:
         return None
-    return {
+    row = {
         "slug": slug,
         "title": item.get("title"),
         "type": item.get("type"),
@@ -45,6 +45,10 @@ def build_series_row(item: dict[str, Any]) -> Optional[dict[str, Any]]:
         "source_url": item.get("url"),
         "last_scraped_at": item.get("last_scraped_at") or datetime.now(timezone.utc).isoformat(),
     }
+    # first_seen_at hanya dikirim bila ada — jangan menimpa nilai backfill SQL dengan null
+    if item.get("first_seen_at"):
+        row["first_seen_at"] = item["first_seen_at"]
+    return row
 
 
 def build_episode_rows(
@@ -54,19 +58,20 @@ def build_episode_rows(
     for ep in episodes:
         if not ep.get("url"):
             continue
-        rows.append(
-            {
-                "series_id": series_id,
-                "number": ep.get("number"),
-                "title": ep.get("title"),
-                "release_date": ep.get("date"),
-                "source_url": ep["url"],
-                "embeds": [e for e in (ep.get("embeds") or []) if e],
-                "servers": ep.get("servers") or [],
-                "stale": bool(ep.get("stale")),
-                "checked_at": ep.get("checked_at"),
-            }
-        )
+        row = {
+            "series_id": series_id,
+            "number": ep.get("number"),
+            "title": ep.get("title"),
+            "release_date": ep.get("date"),
+            "source_url": ep["url"],
+            "embeds": [e for e in (ep.get("embeds") or []) if e],
+            "servers": ep.get("servers") or [],
+            "stale": bool(ep.get("stale")),
+            "checked_at": ep.get("checked_at"),
+        }
+        if ep.get("first_seen_at"):
+            row["first_seen_at"] = ep["first_seen_at"]
+        rows.append(row)
     return rows
 
 
@@ -166,11 +171,14 @@ def main() -> int:
     }
 
     with httpx.Client(base_url=f"{supabase_url.rstrip('/')}/rest/v1", headers=headers, timeout=60.0) as client:
-        # ── Filter series mati (semua episode dicek tapi tidak ada video) ──
+        # ── Filter series mati + variety show ──
         alive: dict[str, dict[str, Any]] = {}
         dead_slugs: list[str] = []
         for slug, item in db.items():
-            if series_has_video(item):
+            tipe = (item.get("type") or "").strip().lower()
+            if any(b == tipe for b in ("tv show", "variety show", "variety", "special")):
+                dead_slugs.append(slug)  # variety dibuang + dihapus dari Supabase
+            elif series_has_video(item):
                 alive[slug] = item
             else:
                 dead_slugs.append(slug)
