@@ -762,22 +762,45 @@ async def run_cli(args) -> int:
                 except Exception as exc:
                     failures.append({"stage": "sources", "slug": ep.get("url"), "error": str(exc)})
 
-            # Probe dulu: test 1 episode. Kalau situs down/tidak bisa di-scrape,
-            # lewati SELURUH tahap sources run ini (jangan buang budget).
+            # Probe: coba hingga 3 episode berbeda. Baru skip tahap bila SEMUA gagal
+            # (satu 503 sesaat tidak boleh membuang seluruh run).
             if pending:
-                probe_series, probe_ep = pending[0]
-                try:
-                    probe = await scraper.get_servers(probe_ep["url"])
-                    if not probe:
-                        log.warning(
-                            "Probe: 0 server dari %s — lewati tahap sources run ini",
-                            probe_ep["url"],
-                        )
-                        pending = []
-                except Exception as exc:
-                    log.warning(
-                        "Probe gagal (%s) — lewati tahap sources run ini", exc
-                    )
+                candidates = [pending[0]]
+                if len(pending) > 2:
+                    candidates.append(pending[len(pending) // 2])
+                if len(pending) > 1:
+                    candidates.append(pending[-1])
+
+                def _apply(pair: tuple[dict[str, Any], dict[str, Any]], servers: list[dict[str, Any]]) -> None:
+                    _, ep = pair
+                    ep["servers"] = servers
+                    ep["embeds"] = [
+                        s.get("stream") or s["embed"]
+                        for s in servers
+                        if s.get("working") is True
+                    ]
+                    if servers:
+                        ep["stale"] = all(s.get("working") is False for s in servers)
+                    else:
+                        ep["stale"] = True
+                    ep["checked_at"] = now_iso()
+
+                probe_ok = False
+                for ps, pe in candidates:
+                    try:
+                        probe = await scraper.get_servers(pe["url"])
+                        if probe:
+                            _apply((ps, pe), probe)
+                            if any(s.get("working") is True for s in probe):
+                                sources_fetched += 1
+                            probe_ok = True
+                            log.info("Probe sukses pada %s — lanjut tahap sources", pe["url"])
+                            break
+                        log.warning("Probe: 0 server dari %s — coba kandidat lain", pe["url"])
+                    except Exception as exc:
+                        log.warning("Probe gagal untuk %s: %s", pe["url"], exc)
+                if not probe_ok:
+                    log.warning("Semua probe gagal — lewati tahap sources run ini")
                     pending = []
 
             await asyncio.gather(*(fetch_embeds(pair) for pair in pending))
