@@ -720,11 +720,12 @@ async def run_cli(args) -> int:
                         series,
                         [{"number": num, "title": card["title"], "date": None, "url": card["url"]}],
                     )
-                    if merged:
-                        # Tandai kapan terakhir series ini di-update (urutan homepage)
-                        series["last_update_at"] = now_iso()
-                        if before == 0:
-                            episodes_merged += 1
+                    # Situs sumber menempatkan kartu ini di halaman terbaru →
+                    # tandai terakhir di-update APA PUN hasil merge-nya
+                    # (episode bisa saja sudah ter-merge di run sebelumnya).
+                    series["last_update_at"] = now_iso()
+                    if merged and before == 0:
+                        episodes_merged += 1
             log.info("Episode baru dari latest: %d", episodes_merged)
 
         sources_fetched = 0
