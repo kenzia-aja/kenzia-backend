@@ -1,4 +1,4 @@
-name: Scrape catalog
+﻿name: Scrape catalog
 
 on:
   schedule:
@@ -10,7 +10,7 @@ on:
         default: "5"
       sources_newest:
         description: "Ambil embed untuk N episode terbaru"
-        default: "300"
+        default: "1500"
 
 permissions:
   contents: write
@@ -45,8 +45,8 @@ jobs:
           python scraper.py \
             --catalog-pages "${{ github.event.inputs.catalog_pages || '500' }}" \
             --latest-pages 1 \
-            --sources-newest "${{ github.event.inputs.sources_newest || '500' }}" \
-            --output data/db.json
+            --sources-newest "${{ github.event.inputs.sources_newest || '1500' }}" \
+            --concurrency 6 --output data/db.json
 
       - name: Migrasi db.json (perbaiki nomor, dedup, urutkan)
         run: python migrate_db.py data/db.json
