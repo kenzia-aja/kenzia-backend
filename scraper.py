@@ -655,6 +655,16 @@ async def run_cli(args) -> int:
             | _top_rated_slugs("drama", 15)
         )
 
+        # Series aktif (ter-update di feed sumber < 48 jam): detail di-scrape ulang
+        # tiap run agar episode tengah yang terlewat (dipublish di luar jendela
+        # halaman latest) ikut terisi dari eplister halaman series.
+        active_cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        active_slugs = {
+            s.get("slug")
+            for s in db.values()
+            if (s.get("last_update_at") or "") >= active_cutoff
+        }
+
         details_scraped = 0
         targets = []
         seen = set()
@@ -669,11 +679,13 @@ async def run_cli(args) -> int:
 
         # Series homepage yang belum punya episode â†’ paksa re-scrape detail,
         # agar baris "Update Series/Film" di homepage selalu bisa diputar.
-        for slug in homepage_slugs:
+        # Series aktif juga di-re-scrape walau sudah punya episode (self-heal gap).
+        for slug in homepage_slugs | active_slugs:
             item = db.get(slug)
-            if item and slug not in seen and not item.get("episodes"):
-                seen.add(slug)
-                targets.append(item)
+            if item and slug not in seen:
+                if not item.get("episodes") or slug in active_slugs:
+                    seen.add(slug)
+                    targets.append(item)
 
         async def enrich(item: dict[str, Any]) -> None:
             nonlocal details_scraped
