@@ -18,6 +18,10 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 CHALLENGE_MARKER = "verify_human"
+CHALLENGE_PAGE_MAX_LEN = 2000  # halaman challenge selalu kecil (<2KB)
+FRESH_EPISODE_HOURS = 48       # episode <=48 jam dianggap baru (prioritas server)
+SERIES_PATH_PREFIX = "series/"
+REPOST_MARKER = "-nomorsesuaiottviu"
 EPISODE_SLUG_RE = re.compile(r"^(?P<series>.+)-episode-\d+$")
 # Server yang diblokir (embed-nya sering error/rusak) â€” disingkirkan dari daftar.
 BLOCKED_HOSTS = ("minochinos.com", "filelions", "filelions.com")
@@ -27,6 +31,24 @@ BLOCKED_NAMES = ("filelions",)
 BLOCKED_SERIES_TYPES = ("tv show", "variety show", "variety", "special")
 # Server yang dijadikan default (paling depan saat dipilih user).
 PREFERRED_SERVERS = ("hydrax",)
+
+
+def is_recent(timestamp: Optional[str], hours: int) -> bool:
+    """True bila `timestamp` (ISO, dari scraper/Supabase) belum lebih tua dari `hours` jam.
+
+    Memakai parsing datetime (bukan string compare) agar format "Z" dan "+00:00"
+    tetap sebanding; timestamp tidak valid dianggap tidak baru.
+    """
+    if not timestamp:
+        return False
+    try:
+        ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    return ts >= cutoff
 
 
 def _server_sort_key(s: dict) -> tuple:
@@ -65,7 +87,8 @@ def extract_episode_number(
         if m:
             return int(m.group(1))
     if raw_title:
-        m = re.search(r"(?:Episode|Ep\.?|E)\s*(\d+)", raw_title, re.IGNORECASE)
+        # lookbehind: huruf 'e' di tengah kata (mis. "Mov"i"e 2019") bukan penanda episode
+        m = re.search(r"(?<![a-z])(?:episode|eps?\.?|e)\s*(\d+)", raw_title, re.IGNORECASE)
         if m:
             return int(m.group(1))
     if url:
@@ -106,24 +129,33 @@ class OppadramaScraper:
             await self._client.get(f"{self.base_url}/?verify_human=1")
         self._verified = True
 
+    @staticmethod
+    def _is_challenge(resp: httpx.Response) -> bool:
+        """True bila respons adalah halaman anti-bot (bukan konten)."""
+        return len(resp.text) < CHALLENGE_PAGE_MAX_LEN and CHALLENGE_MARKER in resp.text
+
     async def _fetch(self, url: str, params: Optional[dict] = None) -> httpx.Response:
         delay = 1.0
         last_exc: Optional[Exception] = None
-        for attempt in range(1, self.retries + 1):
+        for attempt in range(1, max(1, self.retries) + 1):
             try:
                 async with self._sem:
                     if not self._verified:
                         await self._verify()
                     resp = await self._client.get(url, params=params)
                     resp.raise_for_status()
-                    if len(resp.text) < 2000 and CHALLENGE_MARKER in resp.text:
+                    if self._is_challenge(resp):
                         await self._verify()
                         resp = await self._client.get(url, params=params)
                         resp.raise_for_status()
+                        if self._is_challenge(resp):
+                            # challenge persisten = konten tidak akan didapat;
+                            # lempar agar masuk retry/backoff, jangan balik diam-diam
+                            raise ScrapeError(f"Challenge verify_human persisten: {url}")
                     return resp
-            except httpx.HTTPError as exc:
+            except (httpx.HTTPError, ScrapeError) as exc:
                 last_exc = exc
-                log.warning("Percobaan %d/%d gagal untuk %s: %s", attempt, self.retries, url, exc)
+                log.warning("Percobaan %d/%d gagal untuk %s: %s", attempt, max(1, self.retries), url, exc)
                 if attempt < self.retries:
                     await asyncio.sleep(delay)
                     delay *= 2
@@ -134,12 +166,14 @@ class OppadramaScraper:
         return BeautifulSoup(resp.text, "html.parser")
 
     @staticmethod
-    def _parse_card(a_tag) -> Optional[dict[str, Any]]:
+    def _parse_card(a_tag, page_url: Optional[str] = None) -> Optional[dict[str, Any]]:
         if a_tag is None:
             return None
         href = a_tag.get("href")
         if not href:
             return None
+        if page_url:
+            href = urljoin(page_url, href)
         img = a_tag.select_one("img")
         poster = None
         if img is not None:
@@ -149,6 +183,8 @@ class OppadramaScraper:
         tt = a_tag.select_one(".tt")
         title = a_tag.get("title") or (tt.get_text(" ", strip=True) if tt else "")
         slug = slug_from_url(href)
+        if slug.startswith(SERIES_PATH_PREFIX):
+            slug = slug[len(SERIES_PATH_PREFIX):]
         return {
             "slug": slug,
             "url": href,
@@ -161,7 +197,8 @@ class OppadramaScraper:
 
     async def get_schedule(self) -> list[dict[str, Any]]:
         """Jadwal rilis mingguan dari /jadwal/: daftar hari berisi series."""
-        soup = await self.get_soup(f"{self.base_url}/jadwal/")
+        page_url = f"{self.base_url}/jadwal/"
+        soup = await self.get_soup(page_url)
         schedule: list[dict[str, Any]] = []
         for box in soup.select(".bixbox"):
             h = box.select_one(".releases h3 span, .releases h1 span")
@@ -173,19 +210,17 @@ class OppadramaScraper:
             items = []
             for card in box.select(".bsx"):
                 a = card.find("a", href=True)
-                if a is None:
+                parsed = self._parse_card(a, page_url=page_url)
+                if parsed is None:
                     continue
-                slug = slug_from_url(a["href"])
-                if slug.startswith("series/"):
-                    slug = slug[len("series/"):]
                 img = card.select_one("img")
                 epx = card.select_one(".epx")
                 sb = card.select_one(".sb")
                 items.append(
                     {
-                        "slug": slug,
-                        "url": a["href"],
-                        "title": a.get("title") or a.get_text(strip=True),
+                        "slug": parsed["slug"],
+                        "url": parsed["url"],
+                        "title": parsed["title"] or a.get_text(strip=True),
                         "poster": (img.get("src") or img.get("data-lazy-src")) if img else None,
                         "release_status": epx.get_text(strip=True) if epx else None,
                         "episode": sb.get_text(strip=True) if sb else None,
@@ -199,7 +234,7 @@ class OppadramaScraper:
         soup = await self.get_soup(url)
         results = []
         for art in soup.select("article.bs"):
-            card = self._parse_card(art.select_one("a.tip"))
+            card = self._parse_card(art.select_one("a.tip"), page_url=url)
             if card:
                 timeago = art.select_one(".timeago")
                 card["posted"] = timeago.get_text(strip=True) if timeago else None
@@ -231,7 +266,9 @@ class OppadramaScraper:
         soup = await self.get_soup(f"{self.base_url}/series/", params=params)
         results = []
         for art in soup.select("article.bs"):
-            card = self._parse_card(art.select_one("a.tip"))
+            card = self._parse_card(
+                art.select_one("a.tip"), page_url=f"{self.base_url}/series/"
+            )
             if card:
                 results.append(card)
         return results
@@ -243,7 +280,7 @@ class OppadramaScraper:
         soup = await self.get_soup(f"{self.base_url}/", params=params)
         results = []
         for art in soup.select("article.bs"):
-            card = self._parse_card(art.select_one("a.tip"))
+            card = self._parse_card(art.select_one("a.tip"), page_url=f"{self.base_url}/")
             if card:
                 results.append(card)
         return results
@@ -452,28 +489,28 @@ def upsert_item(db: dict[str, dict], data: dict[str, Any]) -> dict[str, Any]:
     return current
 
 
+def _strip_repost_marker(url: str) -> str:
+    if url.endswith(REPOST_MARKER):
+        return url[: -len(REPOST_MARKER)]
+    return url
+
+
 def _clean_episode_url(url: str) -> str:
     """Remove common suffixes that indicate duplicate/repost episodes.
 
     Hanya hapus suffix repost yang benar-benar duplikat:
-      - `-nomorsesuaiottviu`
-      - angka `-2..-5` yang MENGIKUTI nama episode (re-post), contoh:
+      - `-nomorsesuaiottviu` (marker repost sumber, di posisi mana pun setelah nomor)
+      - angka `-2..-N` yang MENGIKUTI nama episode (re-post), contoh:
         `xxx-episode-2-2` -> `xxx-episode-2`, karena `-2` kedua adalah tanda repost.
-      - setelah `-episode-{n}` yang juga diakhiri angka runut (mis. `xxx-episode-4-2`).
     Jangan pernah memotong angka dari nama episode legit (`-episode-2` tetap utuh).
     """
     cleaned = url.rstrip("/")
-    if cleaned.endswith("-nomorsesuaiottviu"):
-        cleaned = cleaned[: -len("-nomorsesuaiottviu")]
-    else:
-        # tanda repost: URL berbentuk `...-episode-{n}-{repost}` (contoh
-        # `xxx-episode-4-2` = duplikat postingan episode 4). Hapus segmen repost
-        # saja, jangan menyentuh nama episode.
-        cleaned = re.sub(r"(-episode-\d+)(?:-\d+)+$", r"\1", cleaned)
-        # jatuhkan `-nomorsesuaiottviu` bila masih tersisa (mis. trailing setelah repost)
-        if cleaned.endswith("-nomorsesuaiottviu"):
-            cleaned = cleaned[: -len("-nomorsesuaiottviu")]
-    return cleaned + "/"
+    # tanda repost: URL berbentuk `...-episode-{n}-{repost}` — segmen setelah
+    # nomor bisa berupa angka (mis. `xxx-episode-4-2`), marker repost
+    # (`xxx-episode-1-nomorsesuaiottviu`), atau kombinasinya. Hapus segmen
+    # repost saja, jangan menyentuh nama episode.
+    cleaned = re.sub(r"(-episode-\d+)(?:-(?:\d+|nomorsesuaiottviu))+$", r"\1", cleaned)
+    return _strip_repost_marker(cleaned) + "/"
 
 
 def merge_episodes(series: dict[str, Any], incoming: list[dict[str, Any]]) -> bool:
@@ -482,7 +519,10 @@ def merge_episodes(series: dict[str, Any], incoming: list[dict[str, Any]]) -> bo
 
     for ep in eps + incoming:
         if ep.get("number") is None:
-            ep["number"] = extract_episode_number(None, ep.get("title"), ep.get("url"))
+            num = extract_episode_number(None, ep.get("title"), ep.get("url"))
+            if num is not None:
+                ep["number"] = num
+                changed = True
 
     by_clean_url = {_clean_episode_url(e.get("url", "")): i for i, e in enumerate(eps)}
     by_num: dict[int, int] = {}
@@ -509,7 +549,12 @@ def merge_episodes(series: dict[str, Any], incoming: list[dict[str, Any]]) -> bo
                 changed = True
             if not existing.get("date") and inc.get("date"):
                 existing["date"] = inc["date"]
-            if existing.get("url", "").endswith("-nomorsesuaiottviu") and not inc_url.endswith("-nomorsesuaiottviu"):
+            # URL repost (`-nomorsesuaiottviu`) ditukar dengan URL asli.
+            # Bandingkan TANPA trailing slash — URL sumber diakhiri "/" sehingga
+            # endswith() langsung selalu False (bug lama: swap tak pernah jalan).
+            existing_clean = existing.get("url", "").rstrip("/")
+            inc_clean_url = inc_url.rstrip("/")
+            if existing_clean.endswith(REPOST_MARKER) and not inc_clean_url.endswith(REPOST_MARKER):
                 existing["url"] = inc_url
                 changed = True
         else:
@@ -531,14 +576,18 @@ def merge_episodes(series: dict[str, Any], incoming: list[dict[str, Any]]) -> bo
 
     deduped = dedup_episodes_list(eps)
     if len(deduped) != len(eps):
-        series["episodes"] = deduped
         changed = True
-    else:
-        series["episodes"] = deduped
+    series["episodes"] = deduped
     return changed
 
 
 def dedup_episodes_list(episodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Buang episode duplikat: prioritas nomor, lalu URL bersih.
+
+    Episode bernomor didedup per nomor; episode tanpa nomor per URL bersih.
+    URL bersih dicek GLOBAL (termasuk milik episode bernomor) agar varian
+    repost tanpa nomor tidak lolos sebagai baris baru.
+    """
     seen_num: dict[int, dict[str, Any]] = {}
     seen_url: set[str] = set()
     result: list[dict[str, Any]] = []
@@ -552,19 +601,16 @@ def dedup_episodes_list(episodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     for ep in sorted(episodes, key=sort_score):
         num = ep.get("number")
-        url = ep.get("url", "")
-        clean_u = _clean_episode_url(url)
+        clean_u = _clean_episode_url(ep.get("url", ""))
 
+        if num is not None and num in seen_num:
+            continue
+        if clean_u in seen_url:
+            continue
+        seen_url.add(clean_u)
         if num is not None:
-            if num in seen_num:
-                continue
             seen_num[num] = ep
-            result.append(ep)
-        else:
-            if clean_u in seen_url:
-                continue
-            seen_url.add(clean_u)
-            result.append(ep)
+        result.append(ep)
 
     sort_episodes(result)
     return result
@@ -615,11 +661,10 @@ async def run_cli(args) -> int:
                 upsert_item(db, it)
                 catalog_slugs.append(it["slug"])
 
-        # Series homepage (16 Drama + 16 Movie terbaru) â€” dipakai untuk detail
-        # re-scrape di bawah dan prioritas pengisian server.
-        # Series homepage (16 Drama + 16 Movie TERBARU DI-UPDATE) — urutan
-        # mengikuti last_update_at (merge episode terbaru) agar baris homepage
-        # persis mencerminkan update terbaru situs sumber.
+        # Series homepage (16 Drama + 16 Movie TERBARU DI-UPDATE) — dipakai untuk
+        # detail re-scrape & prioritas pengisian server. Urutan mengikuti
+        # last_update_at (merge episode terbaru) agar baris homepage persis
+        # mencerminkan update terbaru situs sumber.
         def _newest_slugs(ttype: str, n: int) -> set[str]:
             rows = [
                 s
@@ -655,14 +700,13 @@ async def run_cli(args) -> int:
             | _top_rated_slugs("drama", 15)
         )
 
-        # Series aktif (ter-update di feed sumber < 48 jam): detail di-scrape ulang
-        # tiap run agar episode tengah yang terlewat (dipublish di luar jendela
-        # halaman latest) ikut terisi dari eplister halaman series.
-        active_cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        # Series aktif (ter-update di feed sumber < FRESH_EPISODE_HOURS jam):
+        # detail di-scrape ulang tiap run agar episode tengah yang terlewat
+        # (dipublish di luar jendela halaman latest) ikut terisi dari eplister.
         active_slugs = {
             s.get("slug")
             for s in db.values()
-            if (s.get("last_update_at") or "") >= active_cutoff
+            if is_recent(s.get("last_update_at"), FRESH_EPISODE_HOURS)
         }
 
         details_scraped = 0
@@ -743,10 +787,9 @@ async def run_cli(args) -> int:
         sources_fetched = 0
         if args.sources_newest > 0:
             # homepage_slugs sudah dihitung di atas (16 Drama + 16 Movie terbaru).
-            # Untuk series homepage (termasuk variety show ratusan episode),
-            # hanya episode TERBARU (maks 6) yang diprioritaskan agar budget
-            # tidak habis di episode lama yang jarang ditonton.
-            _fresh_cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+            # Untuk series homepage, hanya episode TERBARU (maks 6) yang
+            # diprioritaskan agar budget tidak habis di episode lama yang
+            # jarang ditonton.
             homepage_recent: dict[str, set[str]] = {}
             for s in db.values():
                 if s.get("slug") in homepage_slugs:
@@ -776,8 +819,7 @@ async def run_cli(args) -> int:
                     g = 1
                 else:
                     g = 3
-                fs = ep.get("first_seen_at") or ""
-                if fs and fs >= _fresh_cutoff and g > 0:
+                if is_recent(ep.get("first_seen_at"), FRESH_EPISODE_HOURS) and g > 0:
                     return (0,)
                 return (g,)
 
@@ -880,7 +922,7 @@ async def run_cli(args) -> int:
             }
         )
 
-        output_path.parent.mkdir(exist_ok=True)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(db, ensure_ascii=False, indent=2), encoding="utf-8")
         report_path = output_path.parent / "scrape_report.json"
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

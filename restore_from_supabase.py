@@ -38,32 +38,14 @@ def fetch_all(client: httpx.Client, table: str) -> list[dict]:
         offset += PAGE
 
 
-def main() -> int:
-    args = sys.argv[1:]
-    out = Path(args[args.index("--output") + 1]) if "--output" in args else Path("data/db.json")
-
-    supabase_url = os.environ.get("SUPABASE_URL")
-    service_key = os.environ.get("SUPABASE_SERVICE_KEY")
-    if not supabase_url or not service_key:
-        fail("Set SUPABASE_URL dan SUPABASE_SERVICE_KEY.")
-
-    headers = {"apikey": service_key, "Authorization": f"Bearer {service_key}"}
-
-    with httpx.Client(
-        base_url=f"{supabase_url.rstrip('/')}/rest/v1",
-        headers=headers,
-        timeout=60.0,
-    ) as client:
-        print("Mengunduh seriesâ€¦")
-        series_rows = fetch_all(client, "series")
-        print(f"  {len(series_rows)} series")
-        print("Mengunduh episodesâ€¦")
-        episode_rows = fetch_all(client, "episodes")
-        print(f"  {len(episode_rows)} episodes")
-
+def build_db(
+    series_rows: list[dict], episode_rows: list[dict]
+) -> dict[str, dict]:
+    """Ubah baris Supabase menjadi struktur db.json (series → episodes)."""
     id_to_slug = {row["id"]: row["slug"] for row in series_rows}
     db: dict[str, dict] = {}
     for row in series_rows:
+        rating = row.get("rating")
         db[row["slug"]] = {
             "slug": row["slug"],
             "url": row.get("source_url"),
@@ -72,7 +54,7 @@ def main() -> int:
             "status": row.get("status"),
             "country": row.get("country"),
             "released": row.get("released"),
-            "rating": str(row["rating"]) if row.get("rating") else None,
+            "rating": str(rating) if rating is not None else None,
             "poster": row.get("poster_url"),
             "network": row.get("network"),
             "director": row.get("director"),
@@ -99,14 +81,42 @@ def main() -> int:
                 "servers": ep.get("servers") or [],
                 "embeds": ep.get("embeds") or [],
                 "stale": bool(ep.get("stale")),
+                "checked_at": ep.get("checked_at"),
                 "first_seen_at": ep.get("first_seen_at"),
             }
         )
 
     for item in db.values():
         item["episodes"].sort(key=lambda e: (e.get("number") is None, e.get("number") or 0))
+    return db
 
-    out.parent.mkdir(exist_ok=True)
+
+def main() -> int:
+    args = sys.argv[1:]
+    out = Path(args[args.index("--output") + 1]) if "--output" in args else Path("data/db.json")
+
+    supabase_url = os.environ.get("SUPABASE_URL")
+    service_key = os.environ.get("SUPABASE_SERVICE_KEY")
+    if not supabase_url or not service_key:
+        fail("Set SUPABASE_URL dan SUPABASE_SERVICE_KEY.")
+
+    headers = {"apikey": service_key, "Authorization": f"Bearer {service_key}"}
+
+    with httpx.Client(
+        base_url=f"{supabase_url.rstrip('/')}/rest/v1",
+        headers=headers,
+        timeout=60.0,
+    ) as client:
+        print("Mengunduh seriesâ€¦")
+        series_rows = fetch_all(client, "series")
+        print(f"  {len(series_rows)} series")
+        print("Mengunduh episodesâ€¦")
+        episode_rows = fetch_all(client, "episodes")
+        print(f"  {len(episode_rows)} episodes")
+
+    db = build_db(series_rows, episode_rows)
+
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(db, ensure_ascii=False, indent=2), encoding="utf-8")
 
     filled = sum(1 for v in db.values() for e in v["episodes"] if e.get("servers"))

@@ -256,6 +256,10 @@ def main() -> int:
         try:
             from scraper import OppadramaScraper, BASE_URL
 
+            import asyncio
+
+            now = datetime.now(timezone.utc).isoformat()
+
             async def _sync_schedule() -> int:
                 scraper = OppadramaScraper(base_url=BASE_URL, concurrency=2, retries=2)
                 try:
@@ -273,11 +277,6 @@ def main() -> int:
                     client.post("/schedule?on_conflict=day", json=batch).raise_for_status()
                 return len(rows)
 
-            import asyncio
-
-            from datetime import datetime, timezone as _tz
-
-            now = datetime.now(_tz.utc).isoformat()
             n_days = asyncio.run(_sync_schedule())
             print(f"Jadwal rilis: {n_days} hari")
         except Exception as exc:  # jadwal gagal tidak boleh menggagalkan sync utama

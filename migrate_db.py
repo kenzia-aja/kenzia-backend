@@ -38,7 +38,7 @@ def migrate(db_path: Path) -> None:
     before = analyze(db)
     print("SEBELUM :", before)
 
-    fixed_numbers = removed_dups = reordered = 0
+    fixed_numbers = removed_dups = changed_series = 0
     for slug, item in db.items():
         eps = item.get("episodes") or []
         if not eps:
@@ -47,11 +47,7 @@ def migrate(db_path: Path) -> None:
         # 1. Re-parse semua nomor episode yang null (mis. "36 END", "37 Extra")
         for ep in eps:
             if ep.get("number") is None:
-                num = extract_episode_number(
-                    None,
-                    ep.get("title"),
-                    ep.get("url"),
-                ) or extract_episode_number(ep.get("title"), ep.get("url"))
+                num = extract_episode_number(None, ep.get("title"), ep.get("url"))
                 if num is not None:
                     ep["number"] = num
                     fixed_numbers += 1
@@ -60,8 +56,8 @@ def migrate(db_path: Path) -> None:
         after_eps = dedup_episodes_list(eps)
         if len(after_eps) != len(eps):
             removed_dups += len(eps) - len(after_eps)
-        if after_eps != eps:  # mendeteksi duplikat ATAU perubahan urutan
-            reordered += 1
+        if after_eps != eps:  # duplikat ATAU perubahan urutan
+            changed_series += 1
         item["episodes"] = after_eps
 
     after = analyze(db)
@@ -69,7 +65,7 @@ def migrate(db_path: Path) -> None:
     print(f"Nomor diperbaiki : {fixed_numbers}")
     print(f"Duplikat dihapus : {removed_dups}")
 
-    if fixed_numbers or removed_dups or reordered or before != after:
+    if fixed_numbers or removed_dups or changed_series or before != after:
         backup = db_path.with_suffix(".bak.json")
         backup.write_text(db_path.read_text(encoding="utf-8"), encoding="utf-8")
         db_path.write_text(
@@ -78,13 +74,6 @@ def migrate(db_path: Path) -> None:
         print(f"Database disimpan. Backup lama: {backup.name}")
     else:
         print("Tidak ada perubahan yang diperlukan.")
-
-    # Laporan detail series kunci untuk verifikasi
-    for key in ("blossoms-of-power",):
-        item = db.get(key)
-        if item:
-            nums = [e.get("number") for e in item.get("episodes") or []]
-            print(f"{key}: {len(nums)} eps -> {nums}")
 
 
 if __name__ == "__main__":
