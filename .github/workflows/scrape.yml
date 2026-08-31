@@ -7,7 +7,7 @@ on:
     inputs:
       catalog_pages:
         description: "Jumlah halaman katalog"
-        default: "0"
+        default: "5"
       sources_newest:
         description: "Ambil embed untuk N episode terbaru"
         default: "2000"
@@ -43,7 +43,7 @@ jobs:
       - name: Scrape catalog
         run: |
           python scraper.py \
-            --catalog-pages "${{ github.event.inputs.catalog_pages || '0' }}" \
+            --catalog-pages "${{ github.event.inputs.catalog_pages || '5' }}" \
             --latest-pages 2 \
             --sources-newest "${{ github.event.inputs.sources_newest || '2000' }}" \
             --concurrency 6 --output data/db.json
