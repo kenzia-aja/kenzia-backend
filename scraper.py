@@ -868,14 +868,20 @@ async def run_cli(args) -> int:
                 except Exception as exc:
                     failures.append({"stage": "sources", "slug": ep.get("url"), "error": str(exc)})
 
-            # Probe: coba hingga 3 episode berbeda. Baru skip tahap bila SEMUA gagal
-            # (satu 503 sesaat tidak boleh membuang seluruh run).
+            # Probe = cek KESEHATAN SITUS (bukan kesehatan episode).
+            # Halaman 200 tapi 0 opsi server = episode itu mati, situs hidup →
+            # tandai stale dan lanjut. Tahap sources hanya boleh di-skip bila
+            # SEMUA kandidat gagal REQUEST (503/challenge persisten).
             if pending:
-                candidates = [pending[0]]
-                if len(pending) > 2:
-                    candidates.append(pending[len(pending) // 2])
-                if len(pending) > 1:
-                    candidates.append(pending[-1])
+                seen_urls: set[str] = set()
+                candidates = []
+                for pair in pending:
+                    u = pair[1]["url"]
+                    if u not in seen_urls:
+                        seen_urls.add(u)
+                        candidates.append(pair)
+                    if len(candidates) >= 6:
+                        break
 
                 def _apply(pair: tuple[dict[str, Any], dict[str, Any]], servers: list[dict[str, Any]]) -> None:
                     _, ep = pair
@@ -895,18 +901,19 @@ async def run_cli(args) -> int:
                 for ps, pe in candidates:
                     try:
                         probe = await scraper.get_servers(pe["url"])
-                        if probe:
-                            _apply((ps, pe), probe)
-                            if any(s.get("working") is True for s in probe):
-                                sources_fetched += 1
-                            probe_ok = True
-                            log.info("Probe sukses pada %s â€” lanjut tahap sources", pe["url"])
-                            break
-                        log.warning("Probe: 0 server dari %s â€” coba kandidat lain", pe["url"])
+                        _apply((ps, pe), probe)
+                        probe_ok = True
+                        if any(s.get("working") is True for s in probe):
+                            sources_fetched += 1
+                        log.info(
+                            "Probe: %d server dari %s — situs hidup, lanjut tahap sources",
+                            len(probe), pe["url"],
+                        )
+                        break
                     except Exception as exc:
                         log.warning("Probe gagal untuk %s: %s", pe["url"], exc)
                 if not probe_ok:
-                    log.warning("Semua probe gagal â€” lewati tahap sources run ini")
+                    log.warning("Semua probe gagal request — lewati tahap sources run ini")
                     pending = []
 
             await asyncio.gather(*(fetch_embeds(pair) for pair in pending))
