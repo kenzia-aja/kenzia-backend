@@ -132,6 +132,28 @@ def chunked(items: list[Any], size: int):
         yield items[start : start + size]
 
 
+def check(resp: httpx.Response, konteks: str) -> None:
+    """raise_for_status + sertakan body PostgREST (400 tanpa pesan = buta)."""
+    if resp.status_code >= 400:
+        raise RuntimeError(f"{konteks}: HTTP {resp.status_code} — {resp.text[:500]}")
+
+
+def upsert(client: httpx.Client, path: str, rows: list[dict[str, Any]], konteks: str) -> None:
+    """POST merge-duplicates per batch.
+
+    PostgREST menolak batch dengan key berbeda antar baris (PGRST102
+    "All object keys must match"). Kolom opsional (first_seen_at,
+    last_update_at) sengaja tidak dikirim bila null agar tidak menimpa
+    backfill SQL — maka kelompokkan dulu berdasarkan signature key.
+    """
+    groups: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for row in rows:
+        groups.setdefault(tuple(sorted(row)), []).append(row)
+    for sig, group in groups.items():
+        for i, batch in enumerate(chunked(group, BATCH_SIZE)):
+            resp = client.post(path, json=batch)
+            check(resp, f"{konteks} (keys={'+'.join(sig)}, batch {i})")
+
 def main() -> int:
     args = sys.argv[1:]
     dry_run = "--dry-run" in args
@@ -189,22 +211,20 @@ def main() -> int:
         dropped = len(dead_slugs)
 
         series_rows = [row for row in (build_series_row(it) for it in alive.values()) if row]
-        for batch in chunked(series_rows, BATCH_SIZE):
-            resp = client.post("/series?on_conflict=slug", json=batch)
-            resp.raise_for_status()
+        upsert(client, "/series?on_conflict=slug", series_rows, "upsert series")
         print(f"Series di-upsert: {len(series_rows)} (dibuang mati: {dropped})")
 
         # Hapus series mati yang sebelumnya sudah terlanjur di Supabase
         # (cascade menghapus episodes-nya juga)
         resp = client.get("/series", params={"select": "slug"})
-        resp.raise_for_status()
+        check(resp, "ambil daftar slug")
         existing_slugs = [row["slug"] for row in resp.json()]
         to_delete = [s for s in existing_slugs if s in set(dead_slugs)]
         for i in range(0, len(to_delete), BATCH_SIZE):
             batch = to_delete[i : i + BATCH_SIZE]
             quoted = ",".join(f'"{s}"' for s in batch)
             resp = client.delete("/series", params={"slug": f"in.({quoted})"})
-            resp.raise_for_status()
+            check(resp, "hapus series mati")
         if to_delete:
             print(f"Series mati dihapus dari Supabase: {len(to_delete)}")
 
@@ -213,7 +233,7 @@ def main() -> int:
         offset = 0
         while True:
             resp = client.get("/series", params={"select": "id,slug", "limit": 1000, "offset": offset})
-            resp.raise_for_status()
+            check(resp, f"bangun id_map offset {offset}")
             rows = resp.json()
             if not rows:
                 break
@@ -232,25 +252,23 @@ def main() -> int:
                 continue
             episode_rows.extend(build_episode_rows(sid, item.get("episodes") or []))
 
-        for batch in chunked(episode_rows, BATCH_SIZE):
-            resp = client.post("/episodes?on_conflict=source_url", json=batch)
-            resp.raise_for_status()
+        upsert(client, "/episodes?on_conflict=source_url", episode_rows, "upsert episodes")
 
         # Agregat genre & negara (dipakai endpoint /api/genres & /api/countries)
         # Hapus dulu agar entri lama yang tidak ada lagi ikut bersih.
         # PostgREST menolak DELETE tanpa filter → pakai id=not.is.null.
-        client.delete("/genres", params={"name": "not.is.null"}).raise_for_status()
-        client.delete("/countries", params={"name": "not.is.null"}).raise_for_status()
+        check(client.delete("/genres", params={"name": "not.is.null"}), "hapus genres lama")
+        check(client.delete("/countries", params={"name": "not.is.null"}), "hapus countries lama")
 
         genre_rows = aggregate_counts(db, "genres")
         for batch in chunked(genre_rows, BATCH_SIZE):
             resp = client.post("/genres?on_conflict=name", json=batch)
-            resp.raise_for_status()
+            check(resp, "upsert genres")
 
         country_rows = aggregate_counts(db, "country")
         for batch in chunked(country_rows, BATCH_SIZE):
             resp = client.post("/countries?on_conflict=name", json=batch)
-            resp.raise_for_status()
+            check(resp, "upsert countries")
 
         # Jadwal rilis mingguan (scrape langsung; 1 halaman, cepat)
         try:
@@ -266,15 +284,16 @@ def main() -> int:
                     days = await scraper.get_schedule()
                 finally:
                     await scraper.close()
-                client.delete(
-                    "/schedule", params={"day": "not.is.null"}
-                ).raise_for_status()
+                check(
+                    client.delete("/schedule", params={"day": "not.is.null"}),
+                    "hapus schedule lama",
+                )
                 rows = [
                     {"day": d["day"], "items": d["items"], "updated_at": now}
                     for d in days
                 ]
                 for batch in chunked(rows, BATCH_SIZE):
-                    client.post("/schedule?on_conflict=day", json=batch).raise_for_status()
+                    check(client.post("/schedule?on_conflict=day", json=batch), "upsert schedule")
                 return len(rows)
 
             n_days = asyncio.run(_sync_schedule())

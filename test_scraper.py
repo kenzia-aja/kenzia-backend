@@ -39,6 +39,7 @@ from sync_supabase import (  # noqa: E402
     build_episode_rows,
     build_series_row,
     series_has_video,
+    upsert,
 )
 
 
@@ -872,6 +873,46 @@ class TestSyncHelpers:
 
     def test_series_has_video_tanpa_episodes_key(self):
         assert series_has_video({}) is True
+
+    def test_upsert_kelompokkan_row_berdasar_signature_key(self):
+        """Regression: PostgREST menolak batch dengan key berbeda antar baris
+        (PGRST102 'All object keys must match') — upsert harus memisah POST
+        per kombinasi key, bukan per urutan."""
+        batches: list[list[dict]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            batches.append(json.loads(request.content))
+            return httpx.Response(201)
+
+        client = httpx.Client(
+            base_url="http://test", transport=httpx.MockTransport(handler)
+        )
+        rows = [
+            {"slug": "a", "title": "A"},
+            {"slug": "b", "title": "B", "last_update_at": "t"},
+            {"slug": "c", "title": "C"},
+            {"slug": "d", "title": "D", "last_update_at": "t"},
+        ]
+        upsert(client, "/series?on_conflict=slug", rows, "upsert series")
+        assert len(batches) == 2
+        for batch in batches:
+            keys = {tuple(sorted(r)) for r in batch}
+            assert len(keys) == 1, f"batch campur signature key: {keys}"
+        assert {r["slug"] for b in batches for r in b} == {"a", "b", "c", "d"}
+
+    def test_upsert_sertakan_body_error(self):
+        """Pesan kegagalan harus memuat body PostgREST (bukan cuma status)."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                400, json={"code": "PGRST102", "message": "All object keys must match"}
+            )
+
+        client = httpx.Client(
+            base_url="http://test", transport=httpx.MockTransport(handler)
+        )
+        with pytest.raises(RuntimeError, match="PGRST102"):
+            upsert(client, "/series?on_conflict=slug", [{"slug": "a"}], "upsert series")
 
 
 # ── _server_sort_key ──
